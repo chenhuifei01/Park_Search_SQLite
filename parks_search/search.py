@@ -1,20 +1,19 @@
 import sqlite3
-import re
 from .db import haversine_distance
 
-def regexp(pattern, subject):
-    reg = re.compile(pattern)
-    return reg.search(subject) is not None
 
 def search_parks(params):
     """
     Search for parks based on the given parameters.
+
     Parameters
     ----------
     params : dict
         A dictionary of parameters to search for. The keys are the
         field names and the values are the values to search for.
+
         If a key is not present, it should not be used in the search.
+
         Keys:
             name: str
                 If included, results should be filtered to only include parks that start with
@@ -25,6 +24,7 @@ def search_parks(params):
                 If included, only parks with an address in the given zip code should be returned.
             open_at: tuple(str, str)
                 If included, only parks that are open at the given time should be returned.
+
                 A tuple of two strings, the first is the day of the week and the second is the
                 time.  The day of the week will be "mon", "tue", "wed", "thu", "fri", "sat", or
                 "sun".  The time will be a value between 0000 and 2359 representing a time.
@@ -32,6 +32,7 @@ def search_parks(params):
                 lat, lon, distance
                 If included, only parks that are within the given distance (in miles) of the
                 given latitude and longitude should be returned.
+
     Returns
     -------
     list
@@ -45,45 +46,67 @@ def search_parks(params):
     # function with the connection. This will allow you to use the haversine_distance function
     # in your SQL queries as shown in the README.
 
+    connection = sqlite3.connect('data/parks.db')
+    connection.create_function('haversine_distance', 4, haversine_distance)
+    connection.row_factory = sqlite3.Row        
+    cursor = connection.cursor()
+
     answer = []
     querylist = []
 
-    connection = sqlite3.connect('data/parks.db')
-    connection.row_factory = sqlite3.Row       
-    connection.create_function('haversine_distance', 4, haversine_distance)
-    connection.create_function('regexp', 2, regexp)
-    cursor = connection.cursor()
-    
 
-    myquery = 'SELECT '
-    if 'near' in params.keys():
-        myquery = myquery + 'haversine_distance(?, ?, latitude, longitude) AS distance, '
-        querylist.extend([params['near'][0],params['near'][1]])
-    myquery = myquery + 'parks.name, parks.description, parks.history, parks.address, parks.url '
-    if 'open_at' in params.keys():
-        myquery = myquery + ', park_times.day, park_times.open_time, park_times.close_time FROM parks JOIN park_times ON parks.id = park_times.park_id WHERE '
+    select_query = 'SELECT'
+    # from_query = ' FROM parks as p JOIN park_times as t '
+    where_query = ' WHERE '
+
+    if 'near' in params:
+        select_query += ' haversine_distance(?, ?, latitude, longitude) AS distance, p.name, p.address, p.description, p.history, p.url '
+        querylist.extend([params['near'][0], params['near'][1]])
     else:
-        myquery = myquery + 'FROM parks WHERE '
-    for k,v in params.items():
-        if k == 'open_at':
-            myquery = myquery + ' day = ? AND open_time <= ? AND close_time >= ? AND '
-            querylist.extend([v[0],v[1],v[1]])
-        elif k == 'name':
-            myquery = myquery + ' name like ' + '\'' + v + '%\' AND '
+        select_query += ' p.name, p.address, p.description, p.history, p.url '
+
+    if 'open_at' in params:
+        select_query += ', t.day, t.open_time, t.close_time FROM parks as p JOIN park_times as t ON p.id = t.park_id' 
+    else:
+        select_query += 'FROM parks as p'
+    
+    for k, v in params.items():
+        if k == 'name':
+            where_query += ' name LIKE ? AND '
+            v = v + '%'
+            querylist.append(v)
+        
         elif k == 'query_terms':
-            for i in v:
-                myquery = myquery + " tokens regexp '[.]* " + i + " [.]*' AND "
+            for token in v:
+                where_query += ' tokens LIKE ? AND '
+                token = '% ' + token + ' %'
+                querylist.append(token)
+
         elif k == 'zip_code':
-            myquery = myquery + " address regexp '[.]*" + v + "[.]*' AND "
+            where_query += ' address LIKE ? AND '
+            v = '%' + v + '%'
+            querylist.append(v)
+
+        elif k == 'open_at':
+            where_query += ' day = ? AND open_time <= ? AND close_time >= ? AND '
+            querylist.extend([v[0], v[1], v[1]])
+        
         elif k == 'near':
-            myquery = myquery + 'distance <= ? AND '
+            where_query += ' distance <= ? AND '
             querylist.append(v[2])
+            
 
-    myquery = myquery[:-5] 
+    myquery = select_query + where_query 
+    myquery = myquery[ : -5]
 
 
-    cursor.execute(myquery,querylist)
+    cursor.execute(myquery, querylist)
     for row in cursor.fetchall():
         answer.append(row)
+    
 
     return answer
+  
+
+    
+    
